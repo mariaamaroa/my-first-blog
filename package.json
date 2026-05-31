@@ -1,0 +1,12 @@
+{
+  "name": "youtrack-proxy",
+  "version": "1.0.0",
+  "description": "Express proxy for fideltour.youtrack.cloud",
+  "main": "proxy-server.js",
+  "scripts": {
+    "start": "node proxy-server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
