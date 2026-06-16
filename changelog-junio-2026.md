@@ -92,3 +92,84 @@
 ### Management
 
 - *Fix:* El label del tipo de crédito "Servicios adicionales" aparecía vacío al añadir o quitar créditos de ese tipo
+
+---
+
+## Análisis técnico backend — develop → master
+
+**Resumen ejecutivo**
+
+- 65 commits (~31 PRs), 195 archivos, +19.308 / -492 líneas, 30 migraciones nuevas en 7 apps
+- Rango temporal: 28 may — 15 jun 2026
+- El deploy es un fast-forward limpio, sin commits divergentes en master ni conflictos
+- **Riesgo global: ALTO** — no por bugs visibles, sino por el volumen de migraciones con backfill/NOT NULL sobre tablas grandes y por nuevas dependencias y variables de entorno que deben estar listas en PRO antes del deploy
+
+**Cambios por área**
+
+| Área | Líneas | Qué entra |
+|---|---|---|
+| whatsapp | +6924/-246 | Refactor multi-WABA (DEV-84/152/124) — el bloque más grande y arriesgado |
+| api | +2898/-73 | Endpoints nuevos (multi-WABA, experiences, connect, filtros notificaciones) |
+| ai | +2133/-62 | Unified-brain Fase 1 (DEV-173), destinatarios escalado humano (DEV-67), BSUID |
+| experiences | +1121 | App nueva — catálogo de actividades (integración tour2b) |
+| sms | +1019/-42 | Validación HLR + campos de contacto (DEV-51, phone E164) |
+| connect | +939 | App nueva — dashboard consumo DTU (BigQuery + Google Ads OAuth, DEV-113/208) |
+| core | +961/-25 | Phone E164, permisos external triggers, HLR status |
+| custom_fields | +728 | Cambio de tipo bloqueado + migración (DEV-42) |
+| automation | +611 | External Triggers (DEV-114) |
+| docs | +1859 | Reestructura docs/product/, runbooks, doc-gap-review |
+
+**Features destacadas**
+
+1. **WhatsApp Multi-WABA (DEV-84/152/124)** — Split WhatsAppAccount→WhatsAppChannel + nuevo modelo WhatsAppWaba. Habilita "1 WABA con N números" y "N WABAs por cadena". API frontal nueva (`/api/v2/whatsapp/waba/`), soporte BSUID, sync por WABA. 18 migraciones (Ola E1: pre-flight, dedupe, UNIQUE, NOT NULL). La Ola E2 (drops destructivos) queda diferida, no entra
+2. **Phone E164 + HLR (DEV-51)** — Normalización de teléfonos a E.164, validación HLR en SMS, campos `last_hlr_status` / `last_hlr_validated_at`
+3. **Automation External Triggers (DEV-114)** — Disparadores externos + permiso `execute_external_trigger`. ⚠️ Race condition conocida en `event_id`
+4. **Connect / DTU (DEV-113/208)** — App nueva: integración Google Ads OAuth + consultas BigQuery + dashboard de consumo DTU
+5. **Experiences (DEV-207/1727)** — App nueva: catálogo de actividades/proveedores (tour2b), multi-tenant por hotel_chain
+6. **AI Unified-brain Fase 1 (DEV-173)** — `state_version`, idempotencia, telemetría/coste de mensajes, rename a `persisted_state`. Destinatarios de notificación para escalado humano (DEV-67)
+7. **Custom fields (DEV-42)** — Bloqueo + migración controlada al cambiar el tipo de un campo
+8. **SES sender automático (DEV-204)** — Se asigna sender SES al crear una hotelchain
+
+---
+
+### ⚠️ Prerrequisitos de deploy (BLOQUEANTES)
+
+**1. Dependencias nuevas**
+```
+pip install -r requirements.txt
+```
+- `python-dotenv==1.0.1`, `phonenumbers==8.13.55`, `google-cloud-bigquery==3.25.0`, bump `drf-yasg` 1.21.7→1.21.15
+
+**2. Variables de entorno nuevas en PRO**
+```
+BIGQUERY_CREDENTIALS_JSON
+GOOGLE_ADS_CLIENT_ID
+GOOGLE_ADS_CLIENT_SECRET
+GOOGLE_ADS_OAUTH_REDIRECT_URI
+GOOGLE_ADS_REDIRECT_URL
+GOOGLE_ADS_REFRESH_TOKEN_ENCRYPTION_SECRET
+```
+Sin ellas, Connect/Google Ads no arranca.
+
+**3. WhatsApp — pre-flight OBLIGATORIO antes de migrate**
+Las migraciones 0016 (dedupe) y 0018 (NOT NULL) tienen precondición explícita: correr `whatsapp_waba_preflight` (`has_blocking_nulls=False`, colisiones auditadas) + backup/snapshot de tablas `whatsapp_*`. Runbook en `docs/features/whatsapp_multi_waba_phase3.md` (Ola E1).
+> ⚠️ El commit DEV-84 f5e416f75 es una "recuperación tras automigrate sin pre-flight" — ya hubo un incidente. No dejar que el deploy auto-migre ciego.
+
+**4. Índice sobre core_contact**
+La migración 0006 crea el índice de `phone1_e164` en paso separado a propósito — ejecutar en ventana de bajo tráfico (tabla enorme, multi-tenant).
+
+**5. Backfill de teléfonos (post-deploy, manual)**
+```
+python manage.py populate_phone1_e164
+```
+La migración solo añade la columna; el llenado no es automático.
+
+**6. Constance**
+Nueva entrada `METABASE_ID_CONNECT_EVENTS` (232).
+
+---
+
+### Notas de migraciones
+
+- En `ai/` hay dos migraciones 0003 paralelas (`ai_notification_recipient` y `conversation_bsuid`) resueltas por `0004_merge` — correcto, no es problema
+- Las migraciones WhatsApp con `RunPython` de dedupe/rename son idempotentes pero con reverse no-op documentado (punto de no retorno en datos). El ensayo debe ir contra snapshot
