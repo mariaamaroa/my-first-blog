@@ -65,6 +65,150 @@
 
 - **Dashboard de analytics — nuevos filtros** — el dashboard de analytics de Connect en Metabase incorpora filtros por integración, uso de API y tipo de webhook
 
+#### Referencia técnica — BigQuery HDH (`hdh_events_raw`)
+
+**¿Qué es y para qué sirve?**
+
+BigQuery HDH registra cada evento de creación o actualización de contacto o entrada que HDH envía a Fideltour. Es la fuente de datos histórica para:
+- Análisis de consumo por cliente, hotel, PMS o tipo de integración (DTU/habitación/mes)
+- Auditoría de la actividad de cada integración conectada
+- Pricing y facturación basada en eventos reales generados
+- Monitorización de integraciones con comportamiento anómalo (picos de actualizaciones, ratios inusuales)
+
+> **Privacidad:** BigQuery no contiene datos personales de huéspedes ni información de reservas. Solo almacena metadatos del evento: quién lo generó, cuándo y sobre qué tipo de entidad.
+
+**DTU (Data Transfer Unit):** unidad que mide cada operación `create` o `update` que HDH envía a Fideltour. Es la métrica base de consumo y facturación por integración.
+
+**Conexión**
+
+| Parámetro | Valor |
+|---|---|
+| Proyecto GCP | `hoteldatahub` |
+| Dataset | `hdh_events_raw` |
+| Fichero credenciales | `hoteldatahub-d50a7f4c7325.json` (raíz del proyecto) |
+| Client email | `hdh-558@hoteldatahub.iam.gserviceaccount.com` |
+
+**Estructura del dataset — 5 tablas**
+
+| Tabla | Tipo | Descripción |
+|---|---|---|
+| `event` | Hechos | Cada operación create/update enviada a Fideltour. Tabla principal para análisis DTU |
+| `webhook_event` | Hechos | Cada llamada POST entrante a `/api/v1/webhooks/` |
+| `hotel` | Referencia | Places activos con `fideltour_id` (~988 hoteles) |
+| `company` | Referencia | Todas las Companies HDH (PMS, BE, WiFi, etc.) |
+| `customer` | Referencia | Cadenas hoteleras con `fideltour_id` |
+
+**Tabla `event` — campos principales**
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `entity` | STRING | `"contact"` (perfil de huésped) o `"entry"` (reserva/estancia) |
+| `action` | STRING | `"create"` (alta nueva) o `"update"` (modificación) |
+| `hotel_chain_id` | INTEGER | `fideltour_id` de la cadena hotelera. Clave principal de agrupación |
+| `hotel_id` | INTEGER | `fideltour_id` del hotel concreto. Nulo en ~35% de los eventos |
+| `timestamp` | TIMESTAMP | Momento exacto en UTC del envío a Fideltour (no la fecha de la reserva) |
+| `contact_source` | INTEGER | Código del tipo de integración cuando `entity='contact'` |
+| `entry_source` | INTEGER | Código del tipo de integración cuando `entity='entry'` |
+| `entry_type` | INTEGER | `0`=reserva (booking), `1`=estancia (stay) |
+| `company_id` | INTEGER | ID de la Company HDH que originó el evento. Join con `company.id` |
+
+**Mapeo de fuentes (`contact_source` / `entry_source`)**
+
+| Tipo de integración | `contact_source` | `entry_source` |
+|---|---|---|
+| PMS | 0 | 4 |
+| Booking Engine | 3 | 7 |
+| WiFi | 1 | 3 |
+| Chatbot | 10 | 9 |
+| Guest Portal | 11 | 8 |
+| Pre check-in | 9 | 29 |
+| PMS Spa | 17 | 15 |
+| PMS Restaurante | 16 | 14 |
+| Web Form | 7 | — |
+| Loyalty BE | 3 | 7 |
+
+> Loyalty BE y Booking Engine comparten los mismos códigos. Para distinguirlos, usar `company_id` con join a la tabla `company`.
+
+**Tabla `webhook_event` — tipos de evento (`webhook_type`)**
+
+`CONTACT_CREATED`, `CONTACT_UPDATED`, `CONTACT_UNSUBSCRIBED`, `CONTACT_LEVEL_UPDATED`, `ENTRY_CREATED`, `ENTRY_UPDATED`, `EMAIL_LINK_CLICKED`, `EMAIL_OPENED`, `EMAIL_SENT`, `EMAIL_BOUNCED`, `LOYALTY_DATA_UPDATED`, `EMAIL_STATUS_UPDATED`, `EMAIL_SENT_TAGGED_CAMPAIGN`, `SEGMENT`, `GOOGLE_ADS`
+
+**Cuándo y cómo se actualiza**
+
+Los eventos se insertan de forma asíncrona mediante una tarea Celery (cola `bigquery`) inmediatamente después de que HDH envía la operación a Fideltour. Si el worker Celery no está disponible, el evento se pierde (sin reintentos). Solo se insertan eventos con `hotel_chain_id` identificado.
+
+Las tablas de referencia se actualizan manualmente:
+```
+python manage.py synchronize_fideltour_hotels    # recarga tabla hotel
+python manage.py synchronize_bigquery_companies  # recarga tabla company
+python manage.py synchronize_bigquery_customers  # recarga tabla customer
+```
+
+> ⚠️ Estas sincronizaciones reemplazan la tabla completa (WRITE_TRUNCATE). Si el comando falla a mitad, la tabla queda vacía hasta la siguiente ejecución.
+
+**Consultas de ejemplo**
+
+DTU total por cadena en un mes:
+```sql
+SELECT
+    hotel_chain_id,
+    COUNT(*) AS total_dtu,
+    COUNTIF(action = 'create') AS creates,
+    COUNTIF(action = 'update') AS updates
+FROM `hoteldatahub.hdh_events_raw.event`
+WHERE timestamp >= '2026-05-01'
+  AND timestamp < '2026-06-01'
+GROUP BY hotel_chain_id
+ORDER BY total_dtu DESC
+```
+
+DTU desglosado por tipo de integración:
+```sql
+SELECT
+    hotel_chain_id,
+    COUNTIF(entity='contact' AND contact_source=0) AS c_pms,
+    COUNTIF(entity='contact' AND contact_source=3) AS c_be,
+    COUNTIF(entity='contact' AND contact_source=1) AS c_wifi,
+    COUNTIF(entity='entry'   AND entry_source=4)   AS e_pms,
+    COUNTIF(entity='entry'   AND entry_source=7)   AS e_be,
+    COUNT(*) AS total
+FROM `hoteldatahub.hdh_events_raw.event`
+WHERE timestamp >= '2026-05-01'
+  AND timestamp < '2026-06-01'
+GROUP BY hotel_chain_id
+```
+
+**Volumen actual (datos a mayo 2026)**
+
+| Métrica | Valor |
+|---|---|
+| Total eventos históricos | ~143 millones |
+| Rango temporal | junio 2025 → presente |
+| Cadenas con datos | ~314 |
+| Hoteles con datos | ~1.155 |
+| Eventos mayo 2026 | ~15 millones |
+| Cadenas activas mayo 2026 | 278 |
+
+Distribución histórica: `contact update` 68,6 M · `entry update` 52,1 M · `entry create` 12,9 M · `contact create` 9,5 M
+
+**DTU/habitación/mes por tipo de integración (mayo 2026)**
+
+| Tipo | DTU/hab/mes mediano (C+U) | DTU/hab/mes mediano (solo Creates) |
+|---|---|---|
+| PMS | ~85 | ~13 |
+| Booking Engine | ~4 | ~2 |
+| WiFi | ~4 | ~4 |
+| Chatbot | ~1 | ~0,3 |
+
+> PMSs con consumo estructuralmente elevado (>300 DTU/hab C+U): **Sihot** (582), **Front Hotel** (534). Engisoft registra 1.159, posible anomalía técnica pendiente de revisión.
+
+**Limitaciones conocidas**
+- Sin particionado: todas las queries hacen full scan de `event`
+- Sin deduplicación: un reintento por error transitorio puede generar filas duplicadas
+- `hotel_id` nulo en ~35% de los eventos
+- Loyalty BE y Booking Engine comparten los mismos códigos de `source`
+- Tablas de referencia (`hotel`, `company`, `customer`) no se auto-sincronizan
+
 ---
 
 ### Identity
