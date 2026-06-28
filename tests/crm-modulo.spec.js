@@ -52,7 +52,7 @@ test('Antigua plataforma - CRM todas las pestañas', async ({ page }) => {
   await page.waitForTimeout(2000);
 
   for (const tab of TABS) {
-    const tabLink = page.locator(`a.menu-link:has(span.menu-text:text-is("${tab}"))`).first();
+    const tabLink = page.locator(`a.menu-link:has(span.menu-text:text-is("${tab}"))`).filter({ visible: true }).first();
     if (await tabLink.count() > 0) {
       await tabLink.scrollIntoViewIfNeeded();
       await tabLink.click();
