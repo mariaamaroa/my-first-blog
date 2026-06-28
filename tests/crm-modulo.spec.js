@@ -52,8 +52,7 @@ test('Antigua plataforma - CRM todas las pestañas', async ({ page }) => {
   await page.waitForTimeout(2000);
 
   for (const tab of TABS) {
-    // Buscar en la barra horizontal superior, no en el menú lateral
-    const tabLink = page.locator(`nav a:has-text("${tab}"), .nav a:has-text("${tab}"), ul.menu a:has-text("${tab}"), [class*="tab"] a:has-text("${tab}"), [class*="nav"] a:has-text("${tab}")`).first();
+    const tabLink = page.locator(`a:has(span.menu-text:text-is("${tab}"))`).first();
     if (await tabLink.count() > 0) {
       await tabLink.scrollIntoViewIfNeeded();
       await tabLink.click();
