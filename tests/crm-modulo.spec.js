@@ -17,8 +17,8 @@ async function login(page, baseUrl) {
     await emailInput.fill(EMAIL);
     await page.locator('input[type="password"]').first().fill(PASSWORD);
     await page.locator('button[type="submit"]').click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000);
   }
 }
 
