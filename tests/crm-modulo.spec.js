@@ -54,7 +54,8 @@ test('Antigua plataforma - CRM todas las pestañas', async ({ page }) => {
   for (const tab of TABS) {
     const tabLink = page.locator(`a:has-text("${tab}"), button:has-text("${tab}")`).first();
     if (await tabLink.count() > 0) {
-      await tabLink.click();
+      await tabLink.scrollIntoViewIfNeeded();
+      await tabLink.click({ force: true });
       await page.waitForLoadState('networkidle');
       await page.waitForTimeout(2000);
       const filename = tab.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '-');
