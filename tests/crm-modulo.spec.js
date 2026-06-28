@@ -52,10 +52,11 @@ test('Antigua plataforma - CRM todas las pestañas', async ({ page }) => {
   await page.waitForTimeout(2000);
 
   for (const tab of TABS) {
-    const tabLink = page.locator(`a:has-text("${tab}"), button:has-text("${tab}")`).first();
+    // Buscar en la barra horizontal superior, no en el menú lateral
+    const tabLink = page.locator(`nav a:has-text("${tab}"), .nav a:has-text("${tab}"), ul.menu a:has-text("${tab}"), [class*="tab"] a:has-text("${tab}"), [class*="nav"] a:has-text("${tab}")`).first();
     if (await tabLink.count() > 0) {
       await tabLink.scrollIntoViewIfNeeded();
-      await tabLink.click({ force: true });
+      await tabLink.click();
       await page.waitForLoadState('networkidle');
       await page.waitForTimeout(2000);
       const filename = tab.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '-');
