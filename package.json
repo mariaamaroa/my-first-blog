@@ -4,7 +4,10 @@
   "description": "Express proxy for fideltour.youtrack.cloud",
   "main": "proxy-server.js",
   "scripts": {
-    "start": "node proxy-server.js"
+    "start": "node proxy-server.js",
+    "comparar": "npx playwright test tests/compare-all.spec.js --headed",
+    "informe": "node scripts/generate-report.js",
+    "comparar:ci": "npx playwright test tests/compare-all.spec.js && node scripts/generate-report.js"
   },
   "dependencies": {
     "express": "^4.19.2"
