@@ -6,12 +6,12 @@ const OLD_BASE = 'https://grm.test.fideltour.com';
 const EMAIL = 'mamaroa@fideltour.com';
 const PASSWORD = process.env.FIDELTOUR_PASSWORD || '';
 
-async function login(page, baseUrl) {
-  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+async function login(page, startUrl) {
+  await page.goto(startUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
-  const emailInput = page.locator('input[type="email"], input[name="email"], input[name="username"], input[type="text"]').first();
   const passInput = page.locator('input[type="password"]').first();
   if (await passInput.count() > 0) {
+    const emailInput = page.locator('input[type="email"], input[name="email"], input[name="username"], input[type="text"]').first();
     await emailInput.fill(EMAIL);
     await passInput.fill(PASSWORD);
     await page.locator('button[type="submit"]').first().click();
@@ -41,7 +41,10 @@ async function descubrirFormulario(page) {
 test('Nueva — descubrir formulario nuevo contacto', async ({ page }) => {
   fs.mkdirSync('screenshots/contacto-form', { recursive: true });
 
-  await login(page, NEW_BASE);
+  // Login starting from CRM contacts (avoids root URL crash)
+  await login(page, `${NEW_BASE}/crm/contacts`);
+
+  // Navigate directly to new contact form
   await page.goto(`${NEW_BASE}/crm/contacts/new`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
   await page.screenshot({ path: 'screenshots/contacto-form/nueva-formulario.png', fullPage: true });
@@ -61,15 +64,31 @@ test('Nueva — descubrir formulario nuevo contacto', async ({ page }) => {
 test('Antigua — descubrir formulario nuevo contacto', async ({ page }) => {
   fs.mkdirSync('screenshots/contacto-form', { recursive: true });
 
-  await login(page, OLD_BASE);
+  await login(page, `${OLD_BASE}/contacts/`);
 
-  await page.goto(`${OLD_BASE}/contacts/add/`, { waitUntil: 'domcontentloaded' });
+  // Click the create new contact button to open the form/modal
+  const btnNuevo = page.locator('a[href*="add"], a[href*="new"], a[href*="create"]').filter({ visible: true }).first();
+  if (await btnNuevo.count() > 0) {
+    await btnNuevo.click();
+  } else {
+    // Try button with text
+    const btnTexto = page.locator('button, a').filter({ hasText: /^\+?\s*(contacto|contact|nuevo|new)$/i }).filter({ visible: true }).first();
+    if (await btnTexto.count() > 0) {
+      await btnTexto.click();
+    }
+  }
+
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(3000);
-
   await page.screenshot({ path: 'screenshots/contacto-form/antigua-formulario.png', fullPage: true });
 
+  // Scope to the form or main content, excluding sidebars/filters
   const campos = await page.evaluate(() => {
-    const container = document.querySelector('form') || document.body;
+    // Prefer a <form> with POST method or an add/create/edit page container
+    const form = document.querySelector('form[method="post"], form[action*="add"], form[action*="create"], form[action*="new"]')
+      || document.querySelector('main form, .content form, #content form, [class*="form-container"], [class*="add-form"]')
+      || document.querySelector('form');
+    const container = form || document.body;
     const campos = [];
     container.querySelectorAll('input, select, textarea').forEach(el => {
       if (el.type === 'hidden' || el.type === 'submit') return;
