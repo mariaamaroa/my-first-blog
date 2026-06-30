@@ -75,7 +75,7 @@ test('Antigua — descubrir formulario nuevo contacto', async ({ page }) => {
   await page.goto(`${OLD_BASE}/contacts/`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
 
-  const btnNuevo = page.locator('button, a').filter({ hasText: /nuevo|new|crear|create|añadir|add/i }).first();
+  const btnNuevo = page.locator('button, a').filter({ hasText: /contacto|contact/i }).filter({ visible: true }).first();
   if (await btnNuevo.count() > 0) {
     await btnNuevo.click();
     await page.waitForTimeout(2000);
