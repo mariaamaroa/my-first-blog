@@ -42,93 +42,56 @@ test('Nueva — descubrir formulario nuevo contacto', async ({ page }) => {
   fs.mkdirSync('screenshots/contacto-form', { recursive: true });
 
   await login(page, NEW_BASE);
-  await page.goto(`${NEW_BASE}/crm/contacts`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${NEW_BASE}/crm/contacts/new`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
+  await page.screenshot({ path: 'screenshots/contacto-form/nueva-formulario.png', fullPage: true });
 
-  // Buscar botón nuevo contacto
-  const btnNuevo = page.locator('button, a').filter({ hasText: /contacto|contact/i }).filter({ visible: true }).first();
-  if (await btnNuevo.count() > 0) {
-    await btnNuevo.click();
-    await page.waitForTimeout(3000);
-    // Esperar modal o panel lateral
-    await page.waitForSelector('form, [role="dialog"], [class*="modal"], [class*="drawer"], [class*="panel"], [class*="sidebar"]', { timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(1000);
-    await page.screenshot({ path: 'screenshots/contacto-form/nueva-formulario.png', fullPage: true });
+  const campos = await descubrirFormulario(page);
+  fs.writeFileSync('screenshots/contacto-form/nueva-campos.json', JSON.stringify(campos, null, 2));
 
-    // Capturar solo campos dentro del modal/form
-    const campos = await page.evaluate(() => {
-      const container = document.querySelector('form, [role="dialog"], [class*="modal"], [class*="drawer"], [class*="panel"]') || document.body;
-      const campos = [];
-      container.querySelectorAll('input, select, textarea').forEach(el => {
-        if (el.type === 'hidden' || el.type === 'submit') return;
-        campos.push({
-          tipo: el.tagName.toLowerCase() === 'select' ? 'select' : el.type || 'text',
-          nombre: el.name || el.id || el.getAttribute('aria-label') || el.placeholder || '(sin nombre)',
-          placeholder: el.placeholder || '',
-          obligatorio: el.required,
-          maxLength: el.maxLength > 0 ? el.maxLength : null,
-          opciones: el.tagName === 'SELECT' ? [...el.options].map(o => o.text) : null,
-        });
-      });
-      return campos;
-    });
-    fs.writeFileSync('screenshots/contacto-form/nueva-campos.json', JSON.stringify(campos, null, 2));
-
-    console.log('\n=== CAMPOS FORMULARIO NUEVA ===');
-    campos.forEach(c => {
-      const req = c.obligatorio ? ' [OBLIGATORIO]' : '';
-      const max = c.maxLength ? ` [max:${c.maxLength}]` : '';
-      console.log(`  ${c.tipo.padEnd(10)} ${c.nombre}${req}${max}`);
-    });
-    console.log(`\nTotal: ${campos.length} campos`);
-  } else {
-    console.log('⚠️ No se encontró botón de nuevo contacto');
-    await page.screenshot({ path: 'screenshots/contacto-form/nueva-sin-boton.png', fullPage: true });
-  }
+  console.log('\n=== CAMPOS FORMULARIO NUEVA ===');
+  campos.forEach(c => {
+    const req = c.obligatorio ? ' [OBLIGATORIO]' : '';
+    const max = c.maxLength ? ` [max:${c.maxLength}]` : '';
+    console.log(`  ${c.tipo.padEnd(10)} ${c.nombre}${req}${max}`);
+  });
+  console.log(`\nTotal: ${campos.length} campos`);
 });
 
 test('Antigua — descubrir formulario nuevo contacto', async ({ page }) => {
   fs.mkdirSync('screenshots/contacto-form', { recursive: true });
 
   await login(page, OLD_BASE);
-  await page.goto(`${OLD_BASE}/contacts/`, { waitUntil: 'domcontentloaded' });
+
+  await page.goto(`${OLD_BASE}/contacts/add/`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
 
-  const btnNuevo = page.locator('button, a').filter({ hasText: /contacto|contact/i }).filter({ visible: true }).first();
-  if (await btnNuevo.count() > 0) {
-    await btnNuevo.click();
-    await page.waitForTimeout(3000);
-    await page.waitForSelector('form, [role="dialog"], [class*="modal"], [class*="drawer"], [class*="panel"], [class*="sidebar"]', { timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(1000);
-    await page.screenshot({ path: 'screenshots/contacto-form/antigua-formulario.png', fullPage: true });
+  await page.screenshot({ path: 'screenshots/contacto-form/antigua-formulario.png', fullPage: true });
 
-    const campos = await page.evaluate(() => {
-      const container = document.querySelector('form, [role="dialog"], [class*="modal"], [class*="drawer"], [class*="panel"]') || document.body;
-      const campos = [];
-      container.querySelectorAll('input, select, textarea').forEach(el => {
-        if (el.type === 'hidden' || el.type === 'submit') return;
-        campos.push({
-          tipo: el.tagName.toLowerCase() === 'select' ? 'select' : el.type || 'text',
-          nombre: el.name || el.id || el.getAttribute('aria-label') || el.placeholder || '(sin nombre)',
-          placeholder: el.placeholder || '',
-          obligatorio: el.required,
-          maxLength: el.maxLength > 0 ? el.maxLength : null,
-          opciones: el.tagName === 'SELECT' ? [...el.options].map(o => o.text) : null,
-        });
+  const campos = await page.evaluate(() => {
+    const container = document.querySelector('form') || document.body;
+    const campos = [];
+    container.querySelectorAll('input, select, textarea').forEach(el => {
+      if (el.type === 'hidden' || el.type === 'submit') return;
+      campos.push({
+        tipo: el.tagName.toLowerCase() === 'select' ? 'select' : el.type || 'text',
+        nombre: el.name || el.id || el.getAttribute('aria-label') || el.placeholder || '(sin nombre)',
+        placeholder: el.placeholder || '',
+        obligatorio: el.required,
+        maxLength: el.maxLength > 0 ? el.maxLength : null,
+        opciones: el.tagName === 'SELECT' ? [...el.options].map(o => o.text) : null,
       });
-      return campos;
     });
-    fs.writeFileSync('screenshots/contacto-form/antigua-campos.json', JSON.stringify(campos, null, 2));
+    return campos;
+  });
 
-    console.log('\n=== CAMPOS FORMULARIO ANTIGUA ===');
-    campos.forEach(c => {
-      const req = c.obligatorio ? ' [OBLIGATORIO]' : '';
-      const max = c.maxLength ? ` [max:${c.maxLength}]` : '';
-      console.log(`  ${c.tipo.padEnd(10)} ${c.nombre}${req}${max}`);
-    });
-    console.log(`\nTotal: ${campos.length} campos`);
-  } else {
-    console.log('⚠️ No se encontró botón de nuevo contacto');
-    await page.screenshot({ path: 'screenshots/contacto-form/antigua-sin-boton.png', fullPage: true });
-  }
+  fs.writeFileSync('screenshots/contacto-form/antigua-campos.json', JSON.stringify(campos, null, 2));
+
+  console.log('\n=== CAMPOS FORMULARIO ANTIGUA ===');
+  campos.forEach(c => {
+    const req = c.obligatorio ? ' [OBLIGATORIO]' : '';
+    const max = c.maxLength ? ` [max:${c.maxLength}]` : '';
+    console.log(`  ${c.tipo.padEnd(10)} ${c.nombre}${req}${max}`);
+  });
+  console.log(`\nTotal: ${campos.length} campos`);
 });
