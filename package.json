@@ -7,7 +7,9 @@
     "start": "node proxy-server.js",
     "comparar": "npx playwright test tests/compare-all.spec.js --headed",
     "informe": "node scripts/generate-report.js",
-    "comparar:ci": "npx playwright test tests/compare-all.spec.js && node scripts/generate-report.js"
+    "comparar:ci": "npx playwright test tests/compare-all.spec.js && node scripts/generate-report.js",
+    "qa": "node agent/index.js",
+    "qa:headed": "QA_HEADLESS=false node agent/index.js"
   },
   "dependencies": {
     "express": "^4.19.2"
