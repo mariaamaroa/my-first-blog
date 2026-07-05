@@ -50,10 +50,19 @@ async function discoverActions(page) {
 
 async function discoverFields(page) {
   return page.evaluate(() => {
-    const form = document.querySelector('form[method="post"], main form, .content form, [class*="form"] form, form') || document.body;
+    // Must have a submit button to be a real form
+    const hasSubmit = document.querySelector(
+      'button[type="submit"], input[type="submit"], button:not([type])'
+    );
+    if (!hasSubmit) return [];
+
+    // Prefer a real <form>, fall back to main content area
+    const form = document.querySelector('form[method="post"], main form, .content form, form') || document.body;
     const fields = [];
     form.querySelectorAll('input, select, textarea').forEach(el => {
-      if (el.type === 'hidden' || el.type === 'submit') return;
+      if (el.type === 'hidden' || el.type === 'submit' || el.type === 'search') return;
+      // Skip nav/header inputs (search boxes, etc.)
+      if (el.closest('nav, header, [class*="navbar"], [class*="header"], [class*="topbar"], [class*="sidebar"]')) return;
       const labelEl = el.id
         ? document.querySelector(`label[for="${el.id}"]`)
         : el.closest('.field, .form-group, [class*="field-"]')?.querySelector('label');

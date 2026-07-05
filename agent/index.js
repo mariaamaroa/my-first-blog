@@ -108,7 +108,9 @@ async function processModule(mod) {
       modResult.cases = cases;
       console.log(`     Tests generados: ${cases.length}`);
       await page.close();
-      modResult.results = await runModuleCases(mod, modResult.fields, cases, RESULTS_DIR);
+      // Pass the discovered form URL directly so executor doesn't re-discover
+      const effectiveFormUrl = formUrl || mod.url;
+      modResult.results = await runModuleCases(mod, effectiveFormUrl, modResult.fields, cases, RESULTS_DIR);
     } else {
       console.log(`     Sin formulario de creación detectado`);
       await page.close();

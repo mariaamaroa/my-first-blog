@@ -28,16 +28,23 @@ async function fillForm(page, fields, values) {
 }
 
 async function detectOutcome(page, urlBefore) {
-  await page.waitForTimeout(1500);
+  // Wait for potential AJAX response or navigation
+  await page.waitForTimeout(2500);
   const urlAfter = page.url();
   const body = await page.evaluate(() => document.body.innerText).catch(() => '');
+  // Also check for toast/notification elements
+  const toast = await page.evaluate(() => {
+    const sel = '[class*="toast"], [class*="alert"], [class*="notification"], [class*="snack"], [role="alert"]';
+    return document.querySelector(sel)?.innerText?.trim() || '';
+  }).catch(() => '');
+  const allText = body + ' ' + toast;
 
+  if (/guardado|saved|created|creado|success|éxito|actualizado|updated|correcto|correct/i.test(allText)) return 'success';
+  if (/duplicado|duplicate|already exists|ya existe/i.test(allText)) return 'duplicate-error';
+  if (/error|inválido|invalid|required|obligatorio|requerido/i.test(allText)) return 'validation-error';
   if (urlAfter !== urlBefore && !urlAfter.includes('new') && !urlAfter.includes('add') && !urlAfter.includes('create')) {
     return 'success';
   }
-  if (/guardado|saved|created|creado|success|éxito|actualizado|updated/i.test(body)) return 'success';
-  if (/duplicado|duplicate|already exists|ya existe/i.test(body)) return 'duplicate-error';
-  if (/error|inválido|invalid|required|obligatorio|requerido/i.test(body)) return 'validation-error';
   return 'unknown';
 }
 
@@ -57,21 +64,23 @@ async function findAndClickAction(page, patterns) {
   return false;
 }
 
-async function runCreate(page, modUrl, fields, values) {
-  await page.goto(modUrl, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
-
-  const created = await findAndClickAction(page, ['nuevo|new|crear|create|\\+\\s', '\\+']);
-  if (!created) {
-    // Try direct /new URL
-    await page.goto(`${modUrl.replace(/\/$/, '')}/new`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2000);
-  }
+async function runCreate(page, formUrl, fields, values) {
+  // Navigate directly to the known form URL
+  await page.goto(formUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
 
   const urlBefore = page.url();
   await fillForm(page, fields, values);
 
-  const submitBtn = page.locator('button[type="submit"], button:has-text("Guardar"), button:has-text("Save"), button:has-text("Crear"), button:has-text("Create")').filter({ visible: true }).first();
+  const submitBtn = page.locator([
+    'button[type="submit"]',
+    'button:has-text("Guardar")',
+    'button:has-text("Save")',
+    'button:has-text("Crear")',
+    'button:has-text("Create")',
+    'button:has-text("Siguiente")',
+    'button:has-text("Next")',
+  ].join(', ')).filter({ visible: true }).first();
   if (await submitBtn.count() > 0) await submitBtn.click();
 
   return detectOutcome(page, urlBefore);
@@ -81,14 +90,24 @@ async function runSearch(page, modUrl, searchTerm) {
   await page.goto(modUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
 
-  const searchInput = page.locator('input[type="search"], input[placeholder*="buscar"], input[placeholder*="search"], input[placeholder*="Search"], input[name*="search"], input[name*="filter"]').first();
+  const searchInput = page.locator([
+    'input[type="search"]',
+    'input[placeholder*="buscar" i]',
+    'input[placeholder*="search" i]',
+    'input[placeholder*="filtrar" i]',
+    'input[placeholder*="filter" i]',
+    'input[name*="search" i]',
+    'input[name*="query" i]',
+    'input[name*="q"]',
+  ].join(', ')).filter({ visible: true }).first();
+
   if (await searchInput.count() === 0) return 'no-search-field';
 
   await searchInput.fill(searchTerm);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(2000);
 
-  const rows = await page.locator('tr, [class*="row"], [class*="item"], [class*="card"]').count();
+  const rows = await page.locator('tr:not(:first-child), [class*="row"], [class*="item"], [class*="card"]').count();
   return rows > 0 ? 'results-filtered' : 'no-results';
 }
 
@@ -113,7 +132,7 @@ async function runPaginate(page, modUrl) {
   return 'no-pagination';
 }
 
-async function runEdit(page, modUrl, fields, values, searchTerm) {
+async function runEdit(page, modUrl, formUrl, fields, values, searchTerm) {
   await page.goto(modUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
 
@@ -125,16 +144,21 @@ async function runEdit(page, modUrl, fields, values, searchTerm) {
     await page.waitForTimeout(2000);
   }
 
-  // Click first result row to open it
-  const firstRow = page.locator('tr[class*="clickable"], tr:has(td), [class*="row"]:has-text("QA"), [class*="item"]:has-text("QA")').first();
+  // Click first QA row or any clickable row
+  const firstRow = page.locator('tr:has-text("QA"), [class*="row"]:has-text("QA"), [class*="item"]:has-text("QA"), tr:has(td a), tr:has(td button)').first();
   if (await firstRow.count() > 0) {
     await firstRow.click();
     await page.waitForTimeout(2000);
   }
 
-  // Find edit button
-  const edited = await findAndClickAction(page, ['editar|edit|modificar|update']);
-  if (!edited) return 'no-edit-button';
+  // Find edit button or icon
+  const edited = await findAndClickAction(page, ['editar', 'edit', 'modificar', 'update']);
+  if (!edited) {
+    // Try edit icon button (pencil icon, etc.)
+    const editIcon = page.locator('[class*="edit"], [class*="pencil"], [title*="edit" i], [title*="editar" i], [aria-label*="edit" i]').filter({ visible: true }).first();
+    if (await editIcon.count() > 0) await editIcon.click();
+    else return 'no-edit-button';
+  }
 
   await page.waitForTimeout(1500);
   const urlBefore = page.url();
@@ -181,7 +205,7 @@ async function runDelete(page, modUrl, searchTerm) {
   return 'unknown';
 }
 
-async function runCase(modUrl, fields, testCase, outputDir) {
+async function runCase(modUrl, formUrl, fields, testCase, outputDir) {
   const page = await newPage();
   const result = {
     id: testCase.id,
@@ -198,7 +222,7 @@ async function runCase(modUrl, fields, testCase, outputDir) {
   try {
     switch (testCase.action) {
       case 'create':
-        result.actual = await runCreate(page, modUrl, fields, testCase.values);
+        result.actual = await runCreate(page, formUrl, fields, testCase.values);
         break;
       case 'search':
         result.actual = await runSearch(page, modUrl, testCase.searchTerm);
@@ -207,7 +231,7 @@ async function runCase(modUrl, fields, testCase, outputDir) {
         result.actual = await runPaginate(page, modUrl);
         break;
       case 'edit':
-        result.actual = await runEdit(page, modUrl, fields, testCase.values, testCase.searchTerm);
+        result.actual = await runEdit(page, modUrl, formUrl, fields, testCase.values, testCase.searchTerm);
         break;
       case 'delete':
         result.actual = await runDelete(page, modUrl, testCase.searchTerm);
@@ -232,13 +256,13 @@ async function runCase(modUrl, fields, testCase, outputDir) {
   return result;
 }
 
-async function runModuleCases(mod, fields, cases, baseDir) {
+async function runModuleCases(mod, formUrl, fields, cases, baseDir) {
   const dir = path.join(baseDir, mod.id);
   fs.mkdirSync(dir, { recursive: true });
   const results = [];
   for (const c of cases) {
     process.stdout.write(`      · ${c.name}... `);
-    const r = await runCase(mod.url, fields, c, dir);
+    const r = await runCase(mod.url, formUrl, fields, c, dir);
     process.stdout.write(r.passed ? '✅\n' : `❌ (got: ${r.actual})\n`);
     results.push(r);
   }
