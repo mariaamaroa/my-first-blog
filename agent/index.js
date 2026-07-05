@@ -135,9 +135,24 @@ async function run() {
     process.exit(1);
   }
 
+  // Support --module <id> to run a single module
+  const moduleArg = process.argv.find(a => a.startsWith('--module=') || a === '--module');
+  const moduleId = moduleArg
+    ? (moduleArg.includes('=') ? moduleArg.split('=')[1] : process.argv[process.argv.indexOf('--module') + 1])
+    : null;
+
+  const modulesToRun = moduleId
+    ? config.modules.filter(m => m.id === moduleId)
+    : config.modules;
+
+  if (moduleId && modulesToRun.length === 0) {
+    console.error(`❌ Módulo "${moduleId}" no encontrado. IDs disponibles: ${config.modules.map(m => m.id).join(', ')}`);
+    process.exit(1);
+  }
+
   console.log('\n🤖 Agente QA — Fideltour saas.test');
   console.log(`   Usuario: ${config.auth.email}`);
-  console.log(`   Módulos: ${config.modules.length}`);
+  console.log(`   Módulos: ${modulesToRun.map(m => m.name).join(', ')}`);
   console.log('='.repeat(50));
 
   fs.mkdirSync(RESULTS_DIR, { recursive: true });
@@ -147,7 +162,7 @@ async function run() {
   await loginOnce();
 
   const moduleResults = [];
-  for (const mod of config.modules) {
+  for (const mod of modulesToRun) {
     const result = await processModule(mod);
     moduleResults.push(result);
   }
