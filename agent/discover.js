@@ -29,16 +29,18 @@ async function discoverTabs(page) {
 async function discoverActions(page) {
   return page.evaluate(() => {
     const actions = [];
-    document.querySelectorAll('button, a').forEach(el => {
+    document.querySelectorAll('button, a, [role="button"]').forEach(el => {
       const text = el.innerText?.trim();
       const href = el.href || '';
-      if (!text || text.length > 60) return;
-      if (/nuevo|new|crear|create|add|añadir|\+/i.test(text)) {
+      if (!text || text.length > 80) return;
+      // Match create/new patterns in text OR href
+      const textMatch = /nuevo|new|crear|create|add|añadir|\+\s/i.test(text) || text === '+';
+      const hrefMatch = /\/(new|create|add|nuevo|crear)(\/|$)/i.test(href);
+      if (textMatch || hrefMatch) {
         actions.push({
           text,
           href: href || null,
           tag: el.tagName.toLowerCase(),
-          selector: el.id ? `#${el.id}` : null,
         });
       }
     });

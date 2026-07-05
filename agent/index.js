@@ -43,43 +43,73 @@ async function processModule(mod) {
       } catch (_) {}
     }
 
-    // Back to main to find forms
-    await page.goto(mod.url, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2000);
+    // Search for create actions: main page + each tab + URL patterns
+    let formUrl = null;
+    let foundAction = null;
 
-    // Look for create/new actions
-    const actions = await discoverActions(page);
-
-    if (actions.length > 0) {
-      const action = actions[0];
-      console.log(`     Acción encontrada: "${action.text}"`);
-
-      if (action.href) {
-        await page.goto(action.href, { waitUntil: 'domcontentloaded' });
-      } else {
-        const btn = page.locator('button, a').filter({ hasText: new RegExp(action.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }).filter({ visible: true }).first();
-        if (await btn.count() > 0) {
-          await btn.click();
-          await page.waitForTimeout(2000);
+    // 1) Try common URL suffixes
+    const urlCandidates = [
+      `${mod.url.replace(/\/$/, '')}/new`,
+      `${mod.url.replace(/\/$/, '')}/create`,
+    ];
+    for (const candidate of urlCandidates) {
+      try {
+        const resp = await page.goto(candidate, { waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(1500);
+        // Valid if we weren't redirected back to the same list
+        if (page.url() === candidate || page.url().startsWith(candidate)) {
+          const fields = await discoverFields(page);
+          if (fields.length > 0) {
+            formUrl = candidate;
+            console.log(`     Formulario en: ${candidate} (${fields.length} campos)`);
+            modResult.fields = fields;
+            break;
+          }
         }
+      } catch (_) {}
+    }
+
+    // 2) Search for create button on main page and each tab
+    if (!formUrl) {
+      const pagesToSearch = [mod.url, ...tabs.map(t => t.href)];
+      for (const searchUrl of pagesToSearch) {
+        try {
+          await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
+          await page.waitForTimeout(1500);
+          const actions = await discoverActions(page);
+          if (actions.length > 0) {
+            foundAction = actions[0];
+            console.log(`     Acción encontrada: "${foundAction.text}" en ${searchUrl}`);
+            break;
+          }
+        } catch (_) {}
       }
-      await page.waitForTimeout(2000);
+    }
 
-      const fields = await discoverFields(page);
-      modResult.fields = fields;
-      console.log(`     Campos: ${fields.length}`);
-
-      if (fields.length > 0) {
-        const cases = generateCases(fields);
-        modResult.cases = cases;
-        console.log(`     Tests generados: ${cases.length}`);
-        await page.context().close();
-
-        // Run cases
-        modResult.results = await runModuleCases(mod, fields, cases, RESULTS_DIR);
+    // 3) Navigate to form via action button
+    if (!formUrl && foundAction) {
+      if (foundAction.href && !foundAction.href.includes('javascript')) {
+        await page.goto(foundAction.href, { waitUntil: 'domcontentloaded' });
       } else {
-        await page.context().close();
+        const btn = page.locator('button, a, [role="button"]')
+          .filter({ hasText: new RegExp(foundAction.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+          .filter({ visible: true }).first();
+        if (await btn.count() > 0) await btn.click();
       }
+      await page.waitForTimeout(2500);
+      const fields = await discoverFields(page);
+      if (fields.length > 0) {
+        modResult.fields = fields;
+        console.log(`     Campos: ${fields.length}`);
+      }
+    }
+
+    if (modResult.fields.length > 0) {
+      const cases = generateCases(modResult.fields);
+      modResult.cases = cases;
+      console.log(`     Tests generados: ${cases.length}`);
+      await page.context().close();
+      modResult.results = await runModuleCases(mod, modResult.fields, cases, RESULTS_DIR);
     } else {
       console.log(`     Sin formulario de creación detectado`);
       await page.context().close();
