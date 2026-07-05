@@ -2,7 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const config = require('./config');
-const { newPage, login, closeBrowser } = require('./browser');
+const { newPage, loginOnce, closeBrowser } = require('./browser');
 const { discoverTabs, discoverActions, discoverFields, discoverPageElements } = require('./discover');
 const { generateCases } = require('./cases');
 const { runModuleCases } = require('./executor');
@@ -20,7 +20,6 @@ async function processModule(mod) {
   const modResult = { id: mod.id, name: mod.name, tabs: [], fields: [], cases: [], results: [] };
 
   try {
-    await login(page);
     await page.goto(mod.url, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
 
@@ -140,6 +139,10 @@ async function run() {
   console.log('='.repeat(50));
 
   fs.mkdirSync(RESULTS_DIR, { recursive: true });
+
+  // Login once, reuse session for all modules
+  console.log('\n🔐 Iniciando sesión...');
+  await loginOnce();
 
   const moduleResults = [];
   for (const mod of config.modules) {

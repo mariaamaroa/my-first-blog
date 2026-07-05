@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { newPage, login } = require('./browser');
+const { newPage } = require('./browser');
 
 async function fillForm(page, fields, values) {
   for (const field of fields) {
@@ -55,7 +55,6 @@ async function runCase(modUrl, fields, testCase, outputDir) {
 
   const t0 = Date.now();
   try {
-    await login(page);
     await page.goto(modUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
