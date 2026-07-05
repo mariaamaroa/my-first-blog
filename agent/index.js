@@ -107,15 +107,15 @@ async function processModule(mod) {
       const cases = generateCases(modResult.fields);
       modResult.cases = cases;
       console.log(`     Tests generados: ${cases.length}`);
-      await page.context().close();
+      await page.close();
       modResult.results = await runModuleCases(mod, modResult.fields, cases, RESULTS_DIR);
     } else {
       console.log(`     Sin formulario de creación detectado`);
-      await page.context().close();
+      await page.close();
     }
   } catch (err) {
     console.log(`     ⚠️  Error: ${err.message.slice(0, 100)}`);
-    await page.context().close().catch(() => {});
+    await page.close().catch(() => {});
   }
 
   // Save module JSON
