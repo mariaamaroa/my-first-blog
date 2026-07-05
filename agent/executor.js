@@ -263,7 +263,7 @@ async function runModuleCases(mod, formUrl, fields, cases, baseDir) {
   for (const c of cases) {
     process.stdout.write(`      · ${c.name}... `);
     const r = await runCase(mod.url, formUrl, fields, c, dir);
-    process.stdout.write(r.passed ? '✅\n' : `❌ (got: ${r.actual})\n`);
+    process.stdout.write(r.passed ? '✅\n' : `❌ (got: ${r.actual}${r.error ? ' — ' + r.error.slice(0, 80) : ''})\n`);
     results.push(r);
   }
   return results;

@@ -50,14 +50,12 @@ async function discoverActions(page) {
 
 async function discoverFields(page) {
   return page.evaluate(() => {
-    // Must have a submit button to be a real form
-    const hasSubmit = document.querySelector(
-      'button[type="submit"], input[type="submit"], button:not([type])'
-    );
-    if (!hasSubmit) return [];
+    // Must have a real <form> element with a submit button
+    const form = document.querySelector('form');
+    if (!form) return [];
 
-    // Prefer a real <form>, fall back to main content area
-    const form = document.querySelector('form[method="post"], main form, .content form, form') || document.body;
+    const hasSubmit = form.querySelector('button[type="submit"], input[type="submit"], button:not([type="button"]):not([type="reset"])');
+    if (!hasSubmit) return [];
     const fields = [];
     form.querySelectorAll('input, select, textarea').forEach(el => {
       if (el.type === 'hidden' || el.type === 'submit' || el.type === 'search') return;
