@@ -2,93 +2,142 @@
 const path = require('path');
 const fs = require('fs');
 const config = require('./config');
-const { discoverFields } = require('./discover');
+const { newPage, login, closeBrowser } = require('./browser');
+const { discoverTabs, discoverActions, discoverFields, discoverPageElements } = require('./discover');
 const { generateCases } = require('./cases');
-const { runAllCases } = require('./executor');
+const { runModuleCases } = require('./executor');
 const { generateReport } = require('./report');
-const { closeBrowser } = require('./browser');
 
-const OUTPUT_DIR = path.join(__dirname, '..', config.output.dir, 'contacto');
+const RESULTS_DIR = path.join(__dirname, '..', config.output.dir);
 const REPORT_PATH = path.join(__dirname, '..', config.output.report);
+
+async function processModule(mod) {
+  console.log(`\n  📦 ${mod.name}`);
+  const modDir = path.join(RESULTS_DIR, mod.id);
+  fs.mkdirSync(modDir, { recursive: true });
+
+  const page = await newPage();
+  const modResult = { id: mod.id, name: mod.name, tabs: [], fields: [], cases: [], results: [] };
+
+  try {
+    await login(page);
+    await page.goto(mod.url, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+
+    // Screenshot main page
+    await page.screenshot({ path: path.join(modDir, 'main.png'), fullPage: true });
+
+    // Discover tabs
+    const tabs = await discoverTabs(page);
+    modResult.tabs = tabs;
+    console.log(`     Pestañas: ${tabs.length > 0 ? tabs.map(t => t.text).join(', ') : 'ninguna detectada'}`);
+
+    // Screenshot each tab
+    for (const [i, tab] of tabs.entries()) {
+      try {
+        await page.goto(tab.href, { waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(1500);
+        await page.screenshot({ path: path.join(modDir, `tab-${i}.png`), fullPage: true });
+        const elements = await discoverPageElements(page);
+        modResult.tabs[i] = { ...tab, elements, screenshot: `tab-${i}.png` };
+      } catch (_) {}
+    }
+
+    // Back to main to find forms
+    await page.goto(mod.url, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+
+    // Look for create/new actions
+    const actions = await discoverActions(page);
+
+    if (actions.length > 0) {
+      const action = actions[0];
+      console.log(`     Acción encontrada: "${action.text}"`);
+
+      if (action.href) {
+        await page.goto(action.href, { waitUntil: 'domcontentloaded' });
+      } else {
+        const btn = page.locator('button, a').filter({ hasText: new RegExp(action.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }).filter({ visible: true }).first();
+        if (await btn.count() > 0) {
+          await btn.click();
+          await page.waitForTimeout(2000);
+        }
+      }
+      await page.waitForTimeout(2000);
+
+      const fields = await discoverFields(page);
+      modResult.fields = fields;
+      console.log(`     Campos: ${fields.length}`);
+
+      if (fields.length > 0) {
+        const cases = generateCases(fields);
+        modResult.cases = cases;
+        console.log(`     Tests generados: ${cases.length}`);
+        await page.context().close();
+
+        // Run cases
+        modResult.results = await runModuleCases(mod, fields, cases, RESULTS_DIR);
+      } else {
+        await page.context().close();
+      }
+    } else {
+      console.log(`     Sin formulario de creación detectado`);
+      await page.context().close();
+    }
+  } catch (err) {
+    console.log(`     ⚠️  Error: ${err.message.slice(0, 100)}`);
+    await page.context().close().catch(() => {});
+  }
+
+  // Save module JSON
+  fs.writeFileSync(
+    path.join(modDir, 'result.json'),
+    JSON.stringify(modResult, null, 2)
+  );
+
+  return modResult;
+}
 
 async function run() {
   if (!config.auth.password) {
-    console.error('❌ Falta FIDELTOUR_PASSWORD. Ejecuta: FIDELTOUR_PASSWORD=xxx node agent/index.js');
+    console.error('❌ Falta FIDELTOUR_PASSWORD\n   Ejecuta: FIDELTOUR_PASSWORD=xxx npm run qa:headed');
     process.exit(1);
   }
 
-  console.log('\n🤖 Agente QA — Formulario nuevo contacto');
+  console.log('\n🤖 Agente QA — Fideltour saas.test');
+  console.log(`   Usuario: ${config.auth.email}`);
+  console.log(`   Módulos: ${config.modules.length}`);
   console.log('='.repeat(50));
 
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  fs.mkdirSync(RESULTS_DIR, { recursive: true });
 
-  // ─── FASE 1: Descubrir campos ─────────────────────
-  console.log('\n📋 Fase 1: Descubriendo campos...');
-  const discoveries = [];
-  for (const [key, platform] of Object.entries(config.platforms)) {
-    console.log(`\n  Plataforma: ${platform.name}`);
-    const result = await discoverFields(platform);
-    if (result.error) {
-      console.log(`  ⚠️  Error: ${result.error}`);
-    } else {
-      console.log(`  ✅ ${result.fields.length} campos encontrados`);
-      fs.writeFileSync(
-        path.join(OUTPUT_DIR, `${key}-fields.json`),
-        JSON.stringify(result.fields, null, 2)
-      );
-    }
-    discoveries.push(result);
+  const moduleResults = [];
+  for (const mod of config.modules) {
+    const result = await processModule(mod);
+    moduleResults.push(result);
   }
 
-  // Use nueva platform fields to generate cases (most complete)
-  const primaryFields = discoveries[0].fields;
-  if (primaryFields.length === 0) {
-    console.error('\n❌ No se encontraron campos en la plataforma nueva. Abortando.');
-    await closeBrowser();
-    process.exit(1);
-  }
-
-  // ─── FASE 2: Generar casos de test ───────────────
-  console.log('\n🧪 Fase 2: Generando casos de test...');
-  const cases = generateCases(primaryFields);
-  console.log(`  ✅ ${cases.length} casos generados:`);
-  cases.forEach(c => console.log(`     · ${c.name}`));
-
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, 'test-cases.json'),
-    JSON.stringify(cases, null, 2)
-  );
-
-  // ─── FASE 3: Ejecutar tests ───────────────────────
-  console.log('\n🚀 Fase 3: Ejecutando tests...');
-  const allResults = {};
-  for (const [key, platform] of Object.entries(config.platforms)) {
-    console.log(`\n  → ${platform.name}`);
-    const discovery = discoveries.find(d => d.platform === platform.name);
-    const fields = discovery?.fields || primaryFields;
-    allResults[platform.name] = await runAllCases(platform, fields, cases, OUTPUT_DIR);
-  }
-
-  // ─── FASE 4: Generar informe ──────────────────────
-  console.log('\n📊 Fase 4: Generando informe...');
-  generateReport({
-    discoveries,
-    cases,
-    results: allResults,
-    outputDir: OUTPUT_DIR,
-    reportPath: REPORT_PATH,
-  });
+  console.log('\n📊 Generando informe...');
+  generateReport({ moduleResults, reportPath: REPORT_PATH });
 
   await closeBrowser();
 
   // Summary
+  const totalTests = moduleResults.reduce((s, m) => s + m.results.length, 0);
+  const totalPassed = moduleResults.reduce((s, m) => s + m.results.filter(r => r.passed).length, 0);
+
   console.log('\n' + '='.repeat(50));
-  for (const [platform, results] of Object.entries(allResults)) {
-    const passed = results.filter(r => r.passed).length;
-    console.log(`  ${platform}: ${passed}/${results.length} tests pasados`);
-  }
-  console.log(`\n✅ Informe: ${REPORT_PATH}`);
-  console.log('   Abre con: xdg-open qa-report.html\n');
+  console.log(`\n✅ Tests: ${totalPassed}/${totalTests} pasados`);
+  moduleResults.forEach(m => {
+    if (m.results.length > 0) {
+      const p = m.results.filter(r => r.passed).length;
+      console.log(`   ${p === m.results.length ? '✅' : '❌'} ${m.name}: ${p}/${m.results.length}`);
+    } else {
+      console.log(`   ⚪ ${m.name}: sin formulario`);
+    }
+  });
+  console.log(`\n📄 Informe: ${REPORT_PATH}`);
+  console.log('   xdg-open qa-report.html\n');
 }
 
 run().catch(err => {

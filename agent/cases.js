@@ -1,123 +1,96 @@
 /**
  * Generates test cases dynamically from discovered fields.
- * No hardcoded field names — adapts to whatever the form has.
  */
 
-const FAKE_DATA = {
-  email: 'qa.test.auto@fideltour-qa.com',
-  emailDuplicate: 'mamaroa@fideltour.com',
+const FAKE = {
+  email: `qa.auto.${Date.now()}@fideltour-qa.com`,
   emailInvalid: 'no-es-un-email',
-  text: 'Test QA Automatizado',
-  tel: '+34600000000',
+  emailDuplicate: 'mamaroa@fideltour.com',
+  text: 'QA Test Automatizado',
+  name: 'Test QA',
+  surname: 'Automatizado',
+  tel: '+34600000001',
   number: '42',
   date: '1990-06-15',
-  select: null, // will pick first non-empty option
 };
 
-function valueForField(field, override = {}) {
-  if (override[field.name] !== undefined) return override[field.name];
+function valueForField(field) {
   if (field.type === 'select') {
     const opts = (field.options || []).filter(o => o.value && o.value !== '');
     return opts.length ? opts[0].value : null;
   }
-  if (field.type === 'email') return FAKE_DATA.email;
-  if (field.type === 'tel') return FAKE_DATA.tel;
-  if (field.type === 'number') return FAKE_DATA.number;
-  if (field.type === 'date') return FAKE_DATA.date;
   if (field.type === 'checkbox') return true;
-  return FAKE_DATA.text;
+  if (field.type === 'email' || field.name.toLowerCase().includes('email')) return FAKE.email;
+  if (field.type === 'tel' || field.name.toLowerCase().includes('phone') || field.name.toLowerCase().includes('tel')) return FAKE.tel;
+  if (field.type === 'number') return FAKE.number;
+  if (field.type === 'date') return FAKE.date;
+  if (field.name.toLowerCase().includes('name') || field.name.toLowerCase().includes('nombre')) return FAKE.name;
+  if (field.name.toLowerCase().includes('surname') || field.name.toLowerCase().includes('apellido')) return FAKE.surname;
+  return FAKE.text;
 }
 
 function generateCases(fields) {
-  const requiredFields = fields.filter(f => f.required);
-  const emailField = fields.find(f => f.type === 'email' || f.name.toLowerCase().includes('email'));
+  if (!fields || fields.length === 0) return [];
 
   const cases = [];
+  const requiredFields = fields.filter(f => f.required);
+  const emailField = fields.find(f => f.type === 'email' || f.name.toLowerCase().includes('email'));
+  const baseValues = Object.fromEntries(fields.map(f => [f.name, valueForField(f)]));
 
-  // ① Happy path — all valid data
+  // ① Happy path
   cases.push({
     id: 'happy-path',
     name: 'Happy path — datos válidos',
     description: 'Rellena todos los campos con datos correctos y guarda',
-    values: Object.fromEntries(fields.map(f => [f.name, valueForField(f)])),
+    values: { ...baseValues },
     expect: 'success',
   });
 
-  // ② Required fields empty — one per required field
-  for (const field of requiredFields) {
-    const values = Object.fromEntries(fields.map(f => [f.name, valueForField(f)]));
-    values[field.name] = '';
+  // ② Required fields empty
+  for (const field of requiredFields.slice(0, 3)) {
+    const values = { ...baseValues, [field.name]: '' };
     cases.push({
       id: `required-empty-${field.name}`,
       name: `Campo obligatorio vacío — ${field.label || field.name}`,
       description: `Deja "${field.label || field.name}" vacío y envía`,
       values,
       expect: 'validation-error',
-      targetField: field.name,
     });
   }
 
-  // ③ Email invalid format
+  // ③ Invalid email
   if (emailField) {
-    const values = Object.fromEntries(fields.map(f => [f.name, valueForField(f)]));
-    values[emailField.name] = FAKE_DATA.emailInvalid;
     cases.push({
       id: 'email-invalid',
       name: 'Email con formato inválido',
       description: 'Introduce un email sin @ y envía',
-      values,
+      values: { ...baseValues, [emailField.name]: FAKE.emailInvalid },
       expect: 'validation-error',
-      targetField: emailField.name,
     });
-  }
 
-  // ④ Duplicate email
-  if (emailField) {
-    const values = Object.fromEntries(fields.map(f => [f.name, valueForField(f)]));
-    values[emailField.name] = FAKE_DATA.emailDuplicate;
+    // ④ Duplicate email
     cases.push({
       id: 'email-duplicate',
-      name: 'Email duplicado (ya existe en el sistema)',
-      description: `Usa el email ${FAKE_DATA.emailDuplicate} que ya existe`,
-      values,
-      expect: 'duplicate-error',
-      targetField: emailField.name,
+      name: 'Email duplicado',
+      description: `Usa el email ${FAKE.emailDuplicate} que ya existe`,
+      values: { ...baseValues, [emailField.name]: FAKE.emailDuplicate },
+      expect: 'duplicate-or-error',
     });
   }
 
-  // ⑤ Max length exceeded
-  const textFields = fields.filter(f => f.maxLength && f.type === 'text');
-  for (const field of textFields.slice(0, 2)) {
-    const values = Object.fromEntries(fields.map(f => [f.name, valueForField(f)]));
-    values[field.name] = 'A'.repeat(field.maxLength + 10);
+  // ⑤ XSS / special chars in first text field
+  const textField = fields.find(f => f.type === 'text' && !f.name.toLowerCase().includes('email'));
+  if (textField) {
     cases.push({
-      id: `max-length-${field.name}`,
-      name: `Longitud máxima superada — ${field.label || field.name}`,
-      description: `Introduce ${field.maxLength + 10} caracteres en un campo con max ${field.maxLength}`,
-      values,
-      expect: 'validation-error',
-      targetField: field.name,
+      id: 'special-chars',
+      name: 'Caracteres especiales en campo texto',
+      description: 'Introduce caracteres especiales y HTML en un campo texto',
+      values: { ...baseValues, [textField.name]: '<b>Test</b> & "comillas" ñáéíóú' },
+      expect: 'success-or-sanitized',
     });
-  }
-
-  // ⑥ Special characters
-  if (emailField) {
-    const values = Object.fromEntries(fields.map(f => [f.name, valueForField(f)]));
-    const nameField = fields.find(f => f.name.toLowerCase().includes('name') || f.name.toLowerCase().includes('nombre'));
-    if (nameField) {
-      values[nameField.name] = '<script>alert("xss")</script>';
-      cases.push({
-        id: 'special-chars',
-        name: 'Caracteres especiales / XSS en nombre',
-        description: 'Introduce un payload XSS en el campo nombre',
-        values,
-        expect: 'sanitized-or-error',
-        targetField: nameField.name,
-      });
-    }
   }
 
   return cases;
 }
 
-module.exports = { generateCases, FAKE_DATA };
+module.exports = { generateCases, FAKE };

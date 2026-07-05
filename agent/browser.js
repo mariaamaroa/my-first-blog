@@ -22,9 +22,10 @@ async function newPage() {
   return ctx.newPage();
 }
 
-async function login(page, startUrl) {
+async function login(page) {
   const { email, password } = config.auth;
-  await page.goto(startUrl, { waitUntil: 'domcontentloaded' });
+  // Start from CRM to avoid root URL issues
+  await page.goto('https://saas.test.fideltour.com/crm/contacts', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
 
   const passInput = page.locator('input[type="password"]').first();

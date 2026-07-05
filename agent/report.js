@@ -1,181 +1,216 @@
 const fs = require('fs');
 const path = require('path');
 
-function img64(filePath) {
-  try {
-    return `data:image/png;base64,${fs.readFileSync(filePath).toString('base64')}`;
-  } catch { return null; }
+function img64(p) {
+  try { return `data:image/png;base64,${fs.readFileSync(p).toString('base64')}`; }
+  catch { return null; }
 }
 
-function badge(passed) {
-  return passed
-    ? `<span class="badge ok">✅ Pasado</span>`
-    : `<span class="badge fail">❌ Fallido</span>`;
+function statusIcon(passed) {
+  return passed ? '✅' : '❌';
 }
 
-function generateReport({ discoveries, cases, results, outputDir, reportPath }) {
-  const platforms = Object.keys(results);
-  const allCaseIds = [...new Set(cases.map(c => c.id))];
+function generateReport({ moduleResults, reportPath }) {
+  const totalModules = moduleResults.length;
+  const modulesWithForms = moduleResults.filter(m => m.cases.length > 0).length;
+  const totalTests = moduleResults.reduce((s, m) => s + m.cases.length, 0);
+  const totalPassed = moduleResults.reduce((s, m) => s + m.results.filter(r => r.passed).length, 0);
+  const totalFailed = totalTests - totalPassed;
+  const pct = totalTests > 0 ? Math.round((totalPassed / totalTests) * 100) : 0;
 
-  // Stats
-  const stats = {};
-  for (const p of platforms) {
-    const r = results[p];
-    stats[p] = {
-      total: r.length,
-      passed: r.filter(x => x.passed).length,
-      failed: r.filter(x => !x.passed).length,
-    };
-  }
+  const modulesSections = moduleResults.map(mod => {
+    const modPassed = mod.results.filter(r => r.passed).length;
+    const modTotal = mod.results.length;
+    const modPct = modTotal > 0 ? Math.round((modPassed / modTotal) * 100) : null;
+    const estado = modTotal === 0 ? 'sin-form' : modPassed === modTotal ? 'ok' : 'fail';
 
-  // Field comparison
-  const fieldMap = {};
-  for (const { platform, fields } of discoveries) {
-    for (const f of fields) {
-      if (!fieldMap[f.name]) fieldMap[f.name] = {};
-      fieldMap[f.name][platform] = f;
-    }
-  }
-  const platformNames = discoveries.map(d => d.platform);
-  const onlyInNew = Object.entries(fieldMap).filter(([, p]) => p[platformNames[0]] && !p[platformNames[1]]);
-  const onlyInOld = Object.entries(fieldMap).filter(([, p]) => !p[platformNames[0]] && p[platformNames[1]]);
-  const inBoth = Object.entries(fieldMap).filter(([, p]) => p[platformNames[0]] && p[platformNames[1]]);
+    const tabsHtml = mod.tabs.map((tab, i) => {
+      const imgSrc = tab.screenshot ? img64(path.join(path.dirname(reportPath), 'qa-results', mod.id, `tab-${i}.png`)) : null;
+      return `<div class="tab-block">
+        <div class="tab-name">${tab.text}</div>
+        ${imgSrc ? `<img class="thumb" src="${imgSrc}" onclick="openLb(this.src)">` : '<div class="no-cap">Sin captura</div>'}
+      </div>`;
+    }).join('');
 
-  // Results table rows
-  let tableRows = '';
-  for (const caseId of allCaseIds) {
-    const c = cases.find(x => x.id === caseId);
-    tableRows += `<tr><td class="case-name">${c.name}</td><td class="case-desc">${c.description}</td>`;
-    for (const p of platforms) {
-      const r = results[p].find(x => x.id === caseId);
-      if (!r) { tableRows += `<td>—</td>`; continue; }
-      const imgSrc = r.screenshot ? img64(path.join(outputDir, r.screenshot)) : null;
-      tableRows += `<td class="${r.passed ? 'cell-ok' : 'cell-fail'}">
-        ${badge(r.passed)}
-        <div class="outcome">Resultado: <code>${r.actual || 'error'}</code></div>
-        ${r.error ? `<div class="err-msg">${r.error.slice(0, 120)}</div>` : ''}
-        ${imgSrc ? `<img class="thumb" src="${imgSrc}" onclick="openLightbox(this.src)">` : ''}
-      </td>`;
-    }
-    tableRows += `</tr>`;
-  }
+    const testsHtml = mod.cases.map((c, i) => {
+      const r = mod.results[i];
+      if (!r) return '';
+      const imgSrc = r.screenshot ? img64(path.join(path.dirname(reportPath), 'qa-results', mod.id, r.screenshot)) : null;
+      return `<tr class="${r.passed ? 'row-ok' : 'row-fail'}">
+        <td>${statusIcon(r.passed)}</td>
+        <td class="td-name">${c.name}</td>
+        <td class="td-desc">${c.description}</td>
+        <td><code>${r.actual || 'error'}</code></td>
+        <td><code>${c.expect}</code></td>
+        <td class="td-dur">${r.duration}ms</td>
+        <td>${imgSrc ? `<img class="thumb-sm" src="${imgSrc}" onclick="openLb(this.src)">` : '—'}</td>
+      </tr>`;
+    }).join('');
+
+    return `<section class="mod-section" id="${mod.id}">
+      <div class="mod-header estado-${estado}">
+        <div class="mod-title">
+          <span class="mod-name">${mod.name}</span>
+          ${modTotal > 0
+            ? `<span class="mod-stats">${modPassed}/${modTotal} tests · ${modPct}%</span>`
+            : `<span class="mod-stats no-form">Sin formulario detectado</span>`}
+        </div>
+        <div class="mod-badges">
+          ${mod.tabs.length > 0 ? `<span class="badge-tab">${mod.tabs.length} pestañas</span>` : ''}
+          ${mod.fields.length > 0 ? `<span class="badge-field">${mod.fields.length} campos</span>` : ''}
+        </div>
+      </div>
+
+      ${mod.tabs.length > 0 ? `
+      <div class="tabs-row">${tabsHtml}</div>` : ''}
+
+      ${modTotal > 0 ? `
+      <div class="tests-wrap">
+        <table class="tests-table">
+          <thead><tr>
+            <th></th><th>Test</th><th>Descripción</th>
+            <th>Resultado</th><th>Esperado</th><th>Tiempo</th><th>Captura</th>
+          </tr></thead>
+          <tbody>${testsHtml}</tbody>
+        </table>
+      </div>` : ''}
+    </section>`;
+  }).join('');
+
+  const sidebarHtml = moduleResults.map(mod => {
+    const modPassed = mod.results.filter(r => r.passed).length;
+    const modTotal = mod.results.length;
+    const estado = modTotal === 0 ? 'sin-form' : modPassed === modTotal ? 'ok' : 'fail';
+    return `<a href="#${mod.id}" class="sb-item sb-${estado}">
+      <span class="sb-icon">${estado === 'ok' ? '✅' : estado === 'fail' ? '❌' : '⚪'}</span>
+      <span class="sb-name">${mod.name}</span>
+      ${modTotal > 0 ? `<span class="sb-count">${modPassed}/${modTotal}</span>` : ''}
+    </a>`;
+  }).join('');
 
   const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QA — Formulario nuevo contacto</title>
+<title>QA Report — Fideltour saas</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f3f8;color:#0f1e35;font-size:14px}
-  header{background:#0f1e35;color:white;padding:20px 32px}
-  header h1{font-size:1.3rem;font-weight:700}
-  header p{opacity:.6;font-size:.8rem;margin-top:4px}
-  .container{max-width:1300px;margin:0 auto;padding:28px 32px}
-  .stats{display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap}
-  .stat{background:white;border-radius:10px;padding:16px 22px;border:1px solid #dde3ec;min-width:160px}
-  .stat-platform{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#8a97a8;margin-bottom:6px}
-  .stat-nums{display:flex;gap:16px;align-items:baseline}
-  .stat-total{font-size:2rem;font-weight:700}
-  .stat-ok{color:#1db87a;font-size:1.1rem;font-weight:600}
-  .stat-fail{color:#e8334a;font-size:1.1rem;font-weight:600}
-  .progress{height:5px;background:#e5e7eb;border-radius:3px;margin-top:10px;overflow:hidden}
-  .progress-fill{height:100%;background:#1db87a;border-radius:3px}
-  h2{font-size:1rem;font-weight:700;margin-bottom:14px;margin-top:28px;color:#0f1e35}
-  .fields-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:28px}
-  .fields-card{background:white;border-radius:10px;border:1px solid #dde3ec;padding:16px}
-  .fields-card h3{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
-  .fields-card.ok h3{color:#1db87a}
-  .fields-card.warn h3{color:#e8334a}
-  .fields-card.neutral h3{color:#2a6ef5}
-  .field-pill{display:inline-block;background:#f0f3f8;border-radius:5px;padding:3px 9px;font-size:.78rem;margin:2px;font-family:monospace}
-  .table-wrap{overflow-x:auto}
-  table{width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden;border:1px solid #dde3ec}
-  th{background:#0f1e35;color:white;padding:12px 14px;text-align:left;font-size:.78rem;font-weight:600;white-space:nowrap}
-  td{padding:12px 14px;border-bottom:1px solid #eef0f3;vertical-align:top;font-size:.82rem}
-  tr:last-child td{border-bottom:none}
-  .case-name{font-weight:600;max-width:200px}
-  .case-desc{color:#4a5a70;max-width:220px;font-size:.78rem}
-  .cell-ok{background:#f0fdf8}
-  .cell-fail{background:#fff5f5}
-  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:700}
-  .badge.ok{background:#dcfce7;color:#15803d}
-  .badge.fail{background:#fee2e2;color:#b91c1c}
-  .outcome{font-size:.72rem;color:#4a5a70;margin-top:4px}
-  .err-msg{font-size:.7rem;color:#b91c1c;margin-top:3px;font-family:monospace;word-break:break-all}
-  .thumb{width:100%;max-width:260px;border-radius:6px;border:1px solid #dde3ec;margin-top:8px;cursor:pointer;transition:transform .15s}
-  .thumb:hover{transform:scale(1.03)}
-  code{background:#f0f3f8;padding:1px 5px;border-radius:4px;font-size:.78rem}
-  .lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:999;align-items:center;justify-content:center}
-  .lightbox.on{display:flex}
-  .lightbox img{max-width:92vw;max-height:92vh;border-radius:8px}
-  .lightbox-close{position:fixed;top:18px;right:24px;color:white;font-size:2rem;cursor:pointer;line-height:1}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f3f8;color:#0f1e35;font-size:13.5px}
+a{text-decoration:none;color:inherit}
+
+header{background:#0f1e35;color:white;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+header h1{font-size:1.2rem;font-weight:700}
+header p{opacity:.55;font-size:.78rem;margin-top:3px}
+.header-stats{display:flex;gap:20px;text-align:center}
+.hs{color:white}
+.hs-num{font-size:1.5rem;font-weight:700;display:block}
+.hs-label{font-size:.65rem;opacity:.6;text-transform:uppercase;letter-spacing:.06em}
+.hs.ok .hs-num{color:#4ade80}
+.hs.fail .hs-num{color:#f87171}
+
+.progress-bar{height:4px;background:#1a2e48}
+.progress-fill{height:100%;background:#4ade80;transition:width .5s}
+
+.layout{display:flex;min-height:calc(100vh - 72px)}
+
+.sidebar{width:200px;min-width:200px;background:white;border-right:1px solid #dde3ec;position:sticky;top:68px;height:calc(100vh - 68px);overflow-y:auto;padding:12px 0}
+.sb-title{font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:#8a97a8;padding:8px 16px 4px;font-weight:700}
+.sb-item{display:flex;align-items:center;gap:7px;padding:7px 16px;border-bottom:none;font-size:.82rem;cursor:pointer;transition:background .1s}
+.sb-item:hover{background:#f0f3f8}
+.sb-ok{border-left:3px solid #4ade80}
+.sb-fail{border-left:3px solid #f87171}
+.sb-sin-form{border-left:3px solid #d1d5db}
+.sb-name{flex:1}
+.sb-count{font-size:.7rem;color:#8a97a8}
+
+.main{flex:1;padding:24px 28px;overflow-x:hidden}
+
+.summary-cards{display:flex;gap:14px;margin-bottom:24px;flex-wrap:wrap}
+.sc{background:white;border-radius:10px;border:1px solid #dde3ec;padding:14px 20px;min-width:130px}
+.sc-num{font-size:1.8rem;font-weight:700}
+.sc-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#8a97a8;margin-top:3px}
+.sc-ok .sc-num{color:#16a34a}
+.sc-fail .sc-num{color:#dc2626}
+.sc-pct .sc-num{color:#2563eb}
+
+.mod-section{background:white;border-radius:10px;border:1px solid #dde3ec;margin-bottom:20px;overflow:hidden}
+.mod-header{padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #eef0f3}
+.estado-ok{border-left:4px solid #4ade80}
+.estado-fail{border-left:4px solid #f87171}
+.estado-sin-form{border-left:4px solid #d1d5db}
+.mod-name{font-weight:700;font-size:.95rem;margin-right:10px}
+.mod-stats{font-size:.78rem;color:#4a5a70}
+.mod-stats.no-form{color:#9ca3af;font-style:italic}
+.mod-badges{display:flex;gap:8px}
+.badge-tab,.badge-field{font-size:.7rem;padding:2px 8px;border-radius:20px;background:#f0f3f8;color:#4a5a70}
+
+.tabs-row{display:flex;gap:12px;padding:16px 20px;overflow-x:auto;border-bottom:1px solid #eef0f3}
+.tab-block{min-width:220px;max-width:260px;flex-shrink:0}
+.tab-name{font-size:.72rem;font-weight:600;color:#4a5a70;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+.thumb{width:100%;border-radius:6px;border:1px solid #dde3ec;cursor:pointer;transition:transform .15s}
+.thumb:hover{transform:scale(1.02)}
+.no-cap{padding:30px;text-align:center;background:#f9fafb;border-radius:6px;color:#9ca3af;font-size:.78rem}
+
+.tests-wrap{padding:0;overflow-x:auto}
+.tests-table{width:100%;border-collapse:collapse;font-size:.8rem}
+.tests-table th{padding:9px 12px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:#8a97a8;border-bottom:1px solid #eef0f3;background:#fafbfc;font-weight:600}
+.tests-table td{padding:10px 12px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
+.tests-table tr:last-child td{border-bottom:none}
+.row-ok{background:#fafffe}
+.row-fail{background:#fff8f8}
+.td-name{font-weight:500;max-width:180px}
+.td-desc{color:#4a5a70;max-width:200px}
+.td-dur{color:#9ca3af;white-space:nowrap}
+code{background:#f0f3f8;padding:1px 6px;border-radius:4px;font-size:.75rem;font-family:monospace}
+.thumb-sm{width:60px;border-radius:4px;cursor:pointer;border:1px solid #dde3ec}
+
+.lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:999;align-items:center;justify-content:center}
+.lightbox.on{display:flex}
+.lightbox img{max-width:90vw;max-height:90vh;border-radius:8px}
+.lb-close{position:fixed;top:16px;right:22px;color:white;font-size:2rem;cursor:pointer;line-height:1}
 </style>
 </head>
 <body>
 <header>
-  <h1>QA — Formulario nuevo contacto</h1>
-  <p>Generado el ${new Date().toLocaleString('es-ES')} · ${platforms.join(' vs ')}</p>
+  <div>
+    <h1>QA Report — Fideltour saas</h1>
+    <p>Generado el ${new Date().toLocaleString('es-ES')} · saas.test.fideltour.com</p>
+  </div>
+  <div class="header-stats">
+    <div class="hs"><span class="hs-num">${totalModules}</span><span class="hs-label">Módulos</span></div>
+    <div class="hs ok"><span class="hs-num">${totalPassed}</span><span class="hs-label">Pasados</span></div>
+    <div class="hs fail"><span class="hs-num">${totalFailed}</span><span class="hs-label">Fallidos</span></div>
+    <div class="hs"><span class="hs-num">${pct}%</span><span class="hs-label">Completado</span></div>
+  </div>
 </header>
-<div class="container">
+<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
 
-  <h2>Resumen por plataforma</h2>
-  <div class="stats">
-    ${platforms.map(p => {
-      const s = stats[p];
-      const pct = Math.round((s.passed / s.total) * 100);
-      return `<div class="stat">
-        <div class="stat-platform">${p}</div>
-        <div class="stat-nums">
-          <span class="stat-total">${s.total}</span>
-          <span class="stat-ok">✅ ${s.passed}</span>
-          <span class="stat-fail">❌ ${s.failed}</span>
-        </div>
-        <div class="progress"><div class="progress-fill" style="width:${pct}%"></div></div>
-      </div>`;
-    }).join('')}
-  </div>
-
-  <h2>Comparativa de campos</h2>
-  <div class="fields-grid">
-    <div class="fields-card neutral">
-      <h3>✅ En ambas plataformas (${inBoth.length})</h3>
-      ${inBoth.map(([name]) => `<span class="field-pill">${name}</span>`).join('')}
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sb-title">Módulos</div>
+    ${sidebarHtml}
+  </nav>
+  <main class="main">
+    <div class="summary-cards">
+      <div class="sc"><div class="sc-num">${totalModules}</div><div class="sc-label">Módulos</div></div>
+      <div class="sc"><div class="sc-num">${modulesWithForms}</div><div class="sc-label">Con formulario</div></div>
+      <div class="sc"><div class="sc-num">${totalTests}</div><div class="sc-label">Tests totales</div></div>
+      <div class="sc sc-ok"><div class="sc-num">${totalPassed}</div><div class="sc-label">Pasados</div></div>
+      <div class="sc sc-fail"><div class="sc-num">${totalFailed}</div><div class="sc-label">Fallidos</div></div>
+      <div class="sc sc-pct"><div class="sc-num">${pct}%</div><div class="sc-label">Éxito</div></div>
     </div>
-    <div class="fields-card ok">
-      <h3>🆕 Solo en nueva (${onlyInNew.length})</h3>
-      ${onlyInNew.map(([name]) => `<span class="field-pill">${name}</span>`).join('') || '<span style="color:#8a97a8;font-size:.8rem">Ninguno</span>'}
-    </div>
-    <div class="fields-card warn">
-      <h3>❌ Solo en antigua (${onlyInOld.length})</h3>
-      ${onlyInOld.map(([name]) => `<span class="field-pill">${name}</span>`).join('') || '<span style="color:#8a97a8;font-size:.8rem">Ninguno</span>'}
-    </div>
-  </div>
-
-  <h2>Resultados de los test cases</h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Test</th>
-          <th>Descripción</th>
-          ${platforms.map(p => `<th>${p}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>${tableRows}</tbody>
-    </table>
-  </div>
-
+    ${modulesSections}
+  </main>
 </div>
 
-<div class="lightbox" id="lb" onclick="closeLightbox()">
-  <span class="lightbox-close" onclick="closeLightbox()">✕</span>
+<div class="lightbox" id="lb" onclick="closeLb()">
+  <span class="lb-close">✕</span>
   <img id="lb-img" src="">
 </div>
 <script>
-  function openLightbox(src){document.getElementById('lb-img').src=src;document.getElementById('lb').classList.add('on')}
-  function closeLightbox(){document.getElementById('lb').classList.remove('on')}
+function openLb(src){document.getElementById('lb-img').src=src;document.getElementById('lb').classList.add('on')}
+function closeLb(){document.getElementById('lb').classList.remove('on')}
 </script>
 </body>
 </html>`;

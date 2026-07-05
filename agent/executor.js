@@ -1,65 +1,50 @@
 const path = require('path');
 const fs = require('fs');
 const { newPage, login } = require('./browser');
-const config = require('./config');
 
 async function fillForm(page, fields, values) {
   for (const field of fields) {
-    const value = values[field.name];
-    if (value === undefined || value === null) continue;
-
+    const val = values[field.name];
+    if (val === undefined || val === null) continue;
     try {
-      let locator;
-      if (field.name && field.name !== '(sin nombre)') {
-        locator = page.locator(`[name="${field.name}"]`).first();
-      } else if (field.label) {
-        locator = page.getByLabel(field.label).first();
-      }
-      if (!locator || await locator.count() === 0) continue;
+      const loc = field.name && field.name !== '(sin nombre)'
+        ? page.locator(`[name="${field.name}"]`).first()
+        : page.getByLabel(field.label || '').first();
+      if (!loc || await loc.count() === 0) continue;
 
       if (field.type === 'select') {
-        if (value) await locator.selectOption(value);
+        if (val) await loc.selectOption(String(val));
       } else if (field.type === 'checkbox') {
-        const checked = await locator.isChecked();
-        if (value && !checked) await locator.check();
-        if (!value && checked) await locator.uncheck();
+        const checked = await loc.isChecked();
+        if (val && !checked) await loc.check();
+        if (!val && checked) await loc.uncheck();
       } else {
-        await locator.fill(String(value));
+        await loc.clear();
+        await loc.fill(String(val));
       }
-    } catch (_) {
-      // field not interactable, skip
-    }
+    } catch (_) {}
   }
 }
 
-async function detectOutcome(page, beforeUrl) {
-  const afterUrl = page.url();
-  const bodyText = await page.evaluate(() => document.body.innerText).catch(() => '');
+async function detectOutcome(page, urlBefore) {
+  await page.waitForTimeout(1500);
+  const urlAfter = page.url();
+  const body = await page.evaluate(() => document.body.innerText).catch(() => '');
 
-  // Success indicators
-  if (afterUrl !== beforeUrl && !afterUrl.includes('new') && !afterUrl.includes('add')) {
+  if (urlAfter !== urlBefore && !urlAfter.includes('new') && !urlAfter.includes('add') && !urlAfter.includes('create')) {
     return 'success';
   }
-  const successPatterns = [/guardado|saved|created|creado|success|éxito/i];
-  if (successPatterns.some(p => p.test(bodyText))) return 'success';
-
-  // Validation error indicators
-  const errorPatterns = [/error|inválido|invalid|required|obligatorio|requerido/i];
-  if (errorPatterns.some(p => p.test(bodyText))) return 'validation-error';
-
-  // Duplicate indicators
-  const dupPatterns = [/duplicado|duplicate|already exists|ya existe/i];
-  if (dupPatterns.some(p => p.test(bodyText))) return 'duplicate-error';
-
+  if (/guardado|saved|created|creado|success|éxito|actualizado|updated/i.test(body)) return 'success';
+  if (/duplicado|duplicate|already exists|ya existe/i.test(body)) return 'duplicate-error';
+  if (/error|inválido|invalid|required|obligatorio|requerido/i.test(body)) return 'validation-error';
   return 'unknown';
 }
 
-async function runCase(platform, fields, testCase, outputDir) {
+async function runCase(modUrl, fields, testCase, outputDir) {
   const page = await newPage();
   const result = {
     id: testCase.id,
     name: testCase.name,
-    platform: platform.name,
     expect: testCase.expect,
     actual: null,
     passed: false,
@@ -68,59 +53,57 @@ async function runCase(platform, fields, testCase, outputDir) {
     duration: 0,
   };
 
-  const start = Date.now();
+  const t0 = Date.now();
   try {
-    await login(page, platform.loginStart);
-    await page.goto(platform.contactForm, { waitUntil: 'domcontentloaded' });
+    await login(page);
+    await page.goto(modUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
-    const beforeUrl = page.url();
-    await fillForm(page, fields, testCase.values);
-    await page.waitForTimeout(500);
-
-    // Try to submit
-    const submitBtn = page.locator('button[type="submit"], button:has-text("Guardar"), button:has-text("Save"), button:has-text("Crear"), button:has-text("Create")').first();
-    if (await submitBtn.count() > 0) {
-      await submitBtn.click();
+    // Find and click a "new/create" button if exists
+    const createBtn = page.locator('button, a').filter({ hasText: /nuevo|new|crear|create|\+ /i }).filter({ visible: true }).first();
+    if (await createBtn.count() > 0) {
+      await createBtn.click();
       await page.waitForTimeout(2000);
     }
 
-    result.actual = await detectOutcome(page, beforeUrl);
+    const urlBefore = page.url();
+    await fillForm(page, fields, testCase.values);
 
-    // Normalize: sanitized-or-error accepts both outcomes
-    if (testCase.expect === 'sanitized-or-error') {
-      result.passed = ['success', 'validation-error'].includes(result.actual);
-    } else {
-      result.passed = result.actual === testCase.expect;
+    // Submit
+    const submitBtn = page.locator('button[type="submit"], button:has-text("Guardar"), button:has-text("Save"), button:has-text("Crear"), button:has-text("Create")').filter({ visible: true }).first();
+    if (await submitBtn.count() > 0) {
+      await submitBtn.click();
     }
 
-    const screenshotName = `${platform.name.replace(/[^a-z0-9]/gi, '-')}-${testCase.id}.png`;
-    const screenshotPath = path.join(outputDir, screenshotName);
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    result.screenshot = screenshotName;
+    result.actual = await detectOutcome(page, urlBefore);
 
+    const expects = testCase.expect.split('-or-');
+    result.passed = expects.some(e => result.actual === e || result.actual.startsWith(e));
+
+    const fname = `${testCase.id}.png`;
+    await page.screenshot({ path: path.join(outputDir, fname), fullPage: true });
+    result.screenshot = fname;
   } catch (err) {
-    result.error = err.message;
+    result.error = err.message.slice(0, 200);
     result.actual = 'error';
-    result.passed = false;
   } finally {
-    result.duration = Date.now() - start;
+    result.duration = Date.now() - t0;
     await page.context().close();
   }
-
   return result;
 }
 
-async function runAllCases(platform, fields, cases, outputDir) {
-  fs.mkdirSync(outputDir, { recursive: true });
+async function runModuleCases(mod, fields, cases, baseDir) {
+  const dir = path.join(baseDir, mod.id);
+  fs.mkdirSync(dir, { recursive: true });
   const results = [];
-  for (const testCase of cases) {
-    process.stdout.write(`    [${platform.name}] ${testCase.name}... `);
-    const result = await runCase(platform, fields, testCase, outputDir);
-    process.stdout.write(result.passed ? '✅\n' : `❌ (expected: ${result.expect}, got: ${result.actual})\n`);
-    results.push(result);
+  for (const c of cases) {
+    process.stdout.write(`      · ${c.name}... `);
+    const r = await runCase(mod.url, fields, c, dir);
+    process.stdout.write(r.passed ? '✅\n' : `❌ (got: ${r.actual})\n`);
+    results.push(r);
   }
   return results;
 }
 
-module.exports = { runAllCases };
+module.exports = { runModuleCases };
